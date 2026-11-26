@@ -1,4 +1,4 @@
-const express = require('express');
+JAMENDO_CLIENT_IDconst express = require('express');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
@@ -333,20 +333,34 @@ const parseList = t => {
 const MEDIA_JSON_SYS = 'Search the web. Reply with ONLY a JSON array and no other text. Each item is an object {"title": string, "url": string}. ';
 // the list the caller hears: titles only (a direct file link is kept when the search found one)
 async function jamendoSearch(s, query, sort, deadline) {
-  const u = new URL(JAMENDO_BASE + '/tracks/');
-  u.searchParams.set('client_id', JAMENDO_ID);
-  u.searchParams.set('format', 'json');
-  u.searchParams.set('limit', '6');
-  u.searchParams.set('audioformat', 'mp32');
-  if (query) u.searchParams.set('search', query);
-  const so = String(sort || '').toLowerCase();
-  if (so === 'new') u.searchParams.set('order', 'releasedate_desc');
-  else if (so === 'popular') u.searchParams.set('order', 'popularity_week');
-  const r = await http(u.toString(), {}, 15000, deadline);
+  // חיפוש ב-Internet Archive (מאגר שמע חינמי פתוח ללא צורך במפתח)
+  const q = encodeURIComponent((query || 'music') + ' AND mediatype:audio AND format:MP3');
+  const order = sort === 'new' ? 'addeddate+desc' : (sort === 'popular' ? 'downloads+desc' : '');
+  const u = `https://archive.org{q}&fl[]=identifier,title,creator&rows=6&output=json${order ? '&sort[]=' + order : ''}`;
+  
+  const r = await http(u, {}, 15000, deadline);
   const j = await r.json().catch(() => ({}));
-  if (!r.ok || !j.headers || j.headers.status !== 'success') throw new Error('jamendo ' + r.status + ' ' + JSON.stringify(j.headers || {}).slice(0, 120));
-  return (j.results || []).filter(x => x && x.audio).map(x => ({ title: (String(x.name || '') + (x.artist_name ? ' - ' + x.artist_name : '')).replace(/\s+/g, ' ').trim().slice(0, 100), url: String(x.audio), src: 'jamendo' })).filter(x => x.title);
+  const docs = (j.response && j.response.docs) || [];
+  
+  const results = [];
+  for (const d of docs) {
+    // שליפת קובץ ה-MP3 מתוך הפריט
+    const metaR = await http(`https://archive.org{d.identifier}/files`, {}, 8000, deadline).catch(() => null);
+    if (!metaR || !metaR.ok) continue;
+    const metaJ = await metaR.json().catch(() => ({}));
+    const mp3 = (metaJ.result || []).find(f => /\.mp3$/i.test(f.name) && f.source === 'original');
+    if (mp3) {
+      results.push({
+        title: `${d.title || d.identifier}${d.creator ? ' - ' + d.creator : ''}`.replace(/\s+/g, ' ').trim().slice(0, 100),
+        url: `https://archive.org{d.identifier}/${encodeURIComponent(mp3.name)}`,
+        src: 'archive'
+      });
+    }
+    if (results.length >= 5) break;
+  }
+  return results;
 }
+
 async function searchMedia(s, query, deadline, sort) {
   query = String(query || '').trim().slice(0, 200);
   if (JAMENDO_ID) {
@@ -374,6 +388,7 @@ async function searchMedia(s, query, deadline, sort) {
     return { error: 'search unavailable' };
   }
 }
+
 // direct file links for one title (second search, done only when the caller asked to play it)
 async function findMediaUrls(title, deadline) {
   const t = await groqText(MEDIA_JSON_SYS + 'Find direct links to an audio or video file (mp3, m4a, mp4, wav) of the requested item. Return up to 4 items, title = the file name, url = the direct link to the file itself and not to a web page.', title, deadline, 35000);
