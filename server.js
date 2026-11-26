@@ -63,7 +63,7 @@ const MEDIA_HINT = ' יש לך קבצי שמע שאפשר להשמיע למתק�
 // history is kept as text only, so a recorded question needs a transcript: the model adds it as a tag that the server strips
 const TRANSCRIBE_HINT = ' אם השאלה הגיעה כהקלטה קולית, התחל את התשובה בתג [[Q:תמלול מדויק של השאלה במילים]] ואחריו התשובה עצמה. לשאלה שהוקלדה אל תוסיף את התג. לעולם אל תזכיר את התג בטקסט אחר.';
 // detailed answers like Gemini: whatever MAX_WORDS says, the limit is never lower than 500 words
-const MAXW = Math.min(1000, Math.max(500, parseInt(process.env.MAX_WORDS, 10) || 700));
+const MAXW = Math.min(1000, Math.max(50, parseInt(process.env.MAX_WORDS, 10) || 700));
 const EXTRA = String(process.env.EXTRA_INSTRUCTION || '').replace(/\s+/g, ' ').trim().slice(0, 2000);
 // fixed base rules of the assistant: always part of the system instruction, cannot be cancelled by callers or by EXTRA_INSTRUCTION
 const RULES = `אתה עוזר אישי אדיב, מקצועי וענייני. ענה על כל שאלה בצורה ברורה ומדויקת.`.replace(/\s+/g, ' ').trim();
