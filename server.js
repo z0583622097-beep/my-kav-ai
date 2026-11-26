@@ -1,4 +1,4 @@
-JAMENDO_CLIENT_IDconst express = require('express');
+const express = require('express');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
@@ -67,6 +67,7 @@ const MAXW = Math.min(1000, Math.max(500, parseInt(process.env.MAX_WORDS, 10) ||
 const EXTRA = String(process.env.EXTRA_INSTRUCTION || '').replace(/\s+/g, ' ').trim().slice(0, 2000);
 // fixed base rules of the assistant: always part of the system instruction, cannot be cancelled by callers or by EXTRA_INSTRUCTION
 const RULES = `אתה עוזר אישי אדיב, מקצועי וענייני. ענה על כל שאלה בצורה ברורה ומדויקת.`.replace(/\s+/g, ' ').trim();
+
 const buildSys = (mode, extra) => 'אתה עוזר קולי בטלפון. כללי יסוד קבועים שגוברים על כל הנחיה אחרת: ' + RULES +
   ' ענה בעברית כמו ג׳מיני: תשובה ארוכה, עשירה ומפורטת, זורמת ורכה לאוזן, בשפה טבעית של דיבור ובפסקאות קצרות. הרחב, הסבר את הרקע, תן דוגמאות, פרטים והקשר, והשלם את התמונה בלי למהר ובלי לקצר. אורך התשובה הוא עד ' + MAXW + ' מילים. רק לברכה או למשפט שיחתי קצר ענה בקצרה. בלי רשימות, בלי כוכביות ובלי סימנים מיוחדים, כך שיהיה נעים להקשיב לה בטלפון. המשתמש יכול לעצור את התשובה בכל רגע בהקשה על מקש ולהמשיך את השיחה, לכן שאלות המשך מתייחסות לתשובה הקודמת שלך. ' +
   (EXTRA ? 'הנחיה כללית מהבעלים: ' + EXTRA + ' ' : '') +
@@ -333,34 +334,20 @@ const parseList = t => {
 const MEDIA_JSON_SYS = 'Search the web. Reply with ONLY a JSON array and no other text. Each item is an object {"title": string, "url": string}. ';
 // the list the caller hears: titles only (a direct file link is kept when the search found one)
 async function jamendoSearch(s, query, sort, deadline) {
-  // חיפוש ב-Internet Archive (מאגר שמע חינמי פתוח ללא צורך במפתח)
-  const q = encodeURIComponent((query || 'music') + ' AND mediatype:audio AND format:MP3');
-  const order = sort === 'new' ? 'addeddate+desc' : (sort === 'popular' ? 'downloads+desc' : '');
-  const u = `https://archive.org{q}&fl[]=identifier,title,creator&rows=6&output=json${order ? '&sort[]=' + order : ''}`;
-  
-  const r = await http(u, {}, 15000, deadline);
+  const u = new URL(JAMENDO_BASE + '/tracks/');
+  u.searchParams.set('client_id', JAMENDO_ID);
+  u.searchParams.set('format', 'json');
+  u.searchParams.set('limit', '6');
+  u.searchParams.set('audioformat', 'mp32');
+  if (query) u.searchParams.set('search', query);
+  const so = String(sort || '').toLowerCase();
+  if (so === 'new') u.searchParams.set('order', 'releasedate_desc');
+  else if (so === 'popular') u.searchParams.set('order', 'popularity_week');
+  const r = await http(u.toString(), {}, 15000, deadline);
   const j = await r.json().catch(() => ({}));
-  const docs = (j.response && j.response.docs) || [];
-  
-  const results = [];
-  for (const d of docs) {
-    // שליפת קובץ ה-MP3 מתוך הפריט
-    const metaR = await http(`https://archive.org{d.identifier}/files`, {}, 8000, deadline).catch(() => null);
-    if (!metaR || !metaR.ok) continue;
-    const metaJ = await metaR.json().catch(() => ({}));
-    const mp3 = (metaJ.result || []).find(f => /\.mp3$/i.test(f.name) && f.source === 'original');
-    if (mp3) {
-      results.push({
-        title: `${d.title || d.identifier}${d.creator ? ' - ' + d.creator : ''}`.replace(/\s+/g, ' ').trim().slice(0, 100),
-        url: `https://archive.org{d.identifier}/${encodeURIComponent(mp3.name)}`,
-        src: 'archive'
-      });
-    }
-    if (results.length >= 5) break;
-  }
-  return results;
+  if (!r.ok || !j.headers || j.headers.status !== 'success') throw new Error('jamendo ' + r.status + ' ' + JSON.stringify(j.headers || {}).slice(0, 120));
+  return (j.results || []).filter(x => x && x.audio).map(x => ({ title: (String(x.name || '') + (x.artist_name ? ' - ' + x.artist_name : '')).replace(/\s+/g, ' ').trim().slice(0, 100), url: String(x.audio), src: 'jamendo' })).filter(x => x.title);
 }
-
 async function searchMedia(s, query, deadline, sort) {
   query = String(query || '').trim().slice(0, 200);
   if (JAMENDO_ID) {
@@ -388,7 +375,6 @@ async function searchMedia(s, query, deadline, sort) {
     return { error: 'search unavailable' };
   }
 }
-
 // direct file links for one title (second search, done only when the caller asked to play it)
 async function findMediaUrls(title, deadline) {
   const t = await groqText(MEDIA_JSON_SYS + 'Find direct links to an audio or video file (mp3, m4a, mp4, wav) of the requested item. Return up to 4 items, title = the file name, url = the direct link to the file itself and not to a web page.', title, deadline, 35000);
